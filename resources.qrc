@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/">
+        <file>fonts/Font-Awesome-Brands-Regular-400.otf</file>
+        <file>fonts/Font-Awesome-Free-Regular-400.otf</file>
+        <file>fonts/Font-Awesome-Free-Solid-900.otf</file>
+    </qresource>
+</RCC>

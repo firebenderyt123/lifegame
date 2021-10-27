@@ -6,14 +6,20 @@
 #include <QtWidgets>
 #include <cmath>
 
-const int MainWindow::maxX = 10; //x, y, z дожны быть > 0
-const int MainWindow::maxY = 10;
-const int MainWindow::maxZ = 10;
+const byte MainWindow::coresCount = QThread::idealThreadCount();
+const size_t MainWindow::maxX = 10; //x, y, z дожны быть > 0
+const size_t MainWindow::maxY = 10;
+const size_t MainWindow::maxZ = 10;
 bool MainWindow::gameIsRun = 0;
 bool MainWindow::canDie = 1;
 bool MainWindow::_2D = 0;
 
-QVector<bool> MainWindow::field;
+size_t MainWindow::fieldBegin;
+size_t MainWindow::fieldEnd;
+const size_t MainWindow::fieldSize = (maxX+3)*(maxY+3)*(maxZ+3);
+byte MainWindow::field[fieldSize];
+byte MainWindow::neighbors[fieldSize];
+size_t MainWindow::longestAxis;
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::MainWindow)
@@ -26,7 +32,7 @@ MainWindow::MainWindow(QWidget *parent) :
         nextGeneration();
     });
 
-    graph = new Q3DScatter;
+    graph = new Q3DScatter();
     graph->setMeasureFps(1);
     //graph->setOrthoProjection(1);
     graph->axisX()->setTitle("X");
@@ -35,16 +41,22 @@ MainWindow::MainWindow(QWidget *parent) :
     graph->axisX()->setRange(0, maxX);
     graph->axisY()->setRange(0, maxY);
     graph->axisZ()->setRange(0, maxZ);
-    if (maxX > maxZ && maxX > maxY) graph->setAspectRatio(maxX/maxY); //самая длинная на y
-    else if (maxZ > maxX && maxZ > maxY) graph->setAspectRatio(maxZ/maxY);
-    else graph->setAspectRatio(1);
+    if (maxX > maxZ && maxX > maxY)
+        longestAxis = maxX;
+    else if (maxZ > maxX && maxZ > maxY)
+        longestAxis = maxZ;
+    else longestAxis = maxY;
+    graph->setAspectRatio(longestAxis/maxY); //самая длинная на y
     graph->setHorizontalAspectRatio(maxX/maxZ); //x на z
     graph->setShadowQuality(QAbstract3DGraph::ShadowQualityNone);
     Kletka::graph = graph;
-    Kletka::KList.resize(Kletka::numsInOne(maxX, maxY, maxZ)+1);
+    Kletka::KList.resize((maxX+3)*(maxY+3)*(maxZ+3)); //maxX+1 и тд это чтобы до нужного размера включительно и + 2 для запаса на расчеты
     Kletka::KList.fill(nullptr);
-    field.resize(Kletka::numsInOne(maxX, maxY, maxZ)+1);
-    field.fill(0);
+    fieldBegin = (maxX+1)*(maxY+1) + maxX+1 + 1;
+    fieldEnd = fieldSize-fieldBegin;
+    std::fill(std::begin(field),std::begin(field)+fieldSize,(byte)0);
+    std::fill(std::begin(neighbors),std::begin(neighbors)+fieldSize,(byte)0);
+    //qDebug()<<Kletka::KList.size();
 
     QWidget *container = QWidget::createWindowContainer(graph);
     ui->verticalLayout->insertWidget(1, container);
@@ -61,7 +73,7 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(ui->radio3D, SIGNAL(clicked()), this, SLOT(xDchanged()));
     connect(ui->dieKletkamBtn, SIGNAL(clicked()), this, SLOT(canDieChanged()));
 
-    int id = QFontDatabase::addApplicationFont(":/fonts/Font-Awesome-Free-Solid-900.otf");
+    size_t id = QFontDatabase::addApplicationFont(":/fonts/Font-Awesome-Free-Solid-900.otf");
     QString family = QFontDatabase::applicationFontFamilies(id).at(0);
 
     QFont font;
@@ -95,10 +107,12 @@ void MainWindow::draw()
     QElapsedTimer drawTimer;
     drawTimer.start();
     ui->FPS->setText(QString::number(graph->currentFps())+" FPS");
-    for (int i = 0; i < field.size(); i++) {
-        if (field.at(i) == 1) {
-            Kletka::KList.at(i)->draw();
-            //qDebug()<<Kletka::KList.at(i)->getPosition()<<i<<Kletka::KList.at(i)->getSeries()->dataProxy()->itemCount();
+    for (size_t i = fieldBegin; i < fieldEnd; i += maxX+1) {
+        for (size_t j = 0; j < maxX+1; ++j) {
+            if (field[i+j]) {
+                Kletka::KList.at(i+j)->draw();
+                //qDebug()<<Kletka::KList.at(i)->getPosition()<<i<<Kletka::KList.at(i)->getSeries()->dataProxy()->itemCount();
+            }
         }
     }
     ui->drawTime->setText("draw: "+QString::number(drawTimer.elapsed())+"ms");
@@ -106,29 +120,36 @@ void MainWindow::draw()
 
 void MainWindow::generateRandomField()
 {
-    for (int i = 0; i < field.size(); i++) {
-        if (field.at(i) == 1) {
-            delete Kletka::KList.at(i);
-            field[i] = 0;
+    size_t num, n;
+
+    if (_2D) {
+        for (size_t k = 2; k <= maxZ+1; ++k) { //удаляем клетки (z > 0)
+            for (size_t j = 1; j <= maxY+1; ++j) {
+                for (size_t i = 1; i <= maxX+1; ++i) {
+                    n = Kletka::numsInOne(i, j, k);
+                    field[n] = (byte)0;
+                    delete Kletka::KList.at(n);
+                }
+            }
         }
     }
-    qDebug()<<Kletka::count<<graph->seriesList()<<graph->selectedSeries();
-    int kCount = (int)((maxX+1)*(maxY+1)*(maxZ+1)*0.1);
-    if (kCount <= 1)
-        kCount = QRandomGenerator::global()->bounded(1, (maxX+1)*(maxY+1)*(maxZ+1));
-    else
-        kCount = QRandomGenerator::global()->bounded(1, kCount);
 
-    int x, y, z;
-    for (int i = 0; i < kCount; i++) {
-        x = QRandomGenerator::global()->bounded((int)graph->axisX()->min(), maxX+1);
-        y = QRandomGenerator::global()->bounded((int)graph->axisY()->min(), maxY+1);
-        if (_2D == 0)
-            z = QRandomGenerator::global()->bounded((int)graph->axisZ()->min(), maxZ+1);
-        else z = 0;
-        new Kletka(x, y, z);
-        field[Kletka::numsInOne(x, y, z)] = 1;
+    for (size_t k = 1; k <= maxZ*(!_2D)+1; ++k) {
+        for (size_t j = 1; j <= maxY+1; ++j) {
+            for (size_t i = 1; i <= maxX+1; ++i) {
+                num = QRandomGenerator::global()->bounded(0, 2);
+                n = Kletka::numsInOne(i, j, k);
+                if (num && Kletka::KList.at(n) == nullptr) {
+                    Kletka::KList[n] = new Kletka(i, j, k);
+                    //qDebug()<<n<<Kletka::oneInNums(n)<<i<<j<<k;
+                } else if (!num && Kletka::KList.at(n) != nullptr)
+                    delete Kletka::KList.at(n);
+                field[n] = (byte)num;
+                //qDebug()<<i<<j<<k<<n<<num<<Kletka::KList[n];
+            }
+        }
     }
+    //qDebug()<<Kletka::count;
     draw();
 }
 
@@ -164,7 +185,6 @@ void MainWindow::nextGenClicked()
 {
     timer->stop();
     gameIsRun = 0;
-    timer->stop();
     ui->playBtn->setText("\uf04b");
     nextGeneration();
 }
@@ -190,75 +210,120 @@ void MainWindow::nextGeneration()
     QElapsedTimer calcTimer;
     calcTimer.start();
 
-    int n, m, aliveNeigbours;
-    QVector<bool> fieldCopy = field;
-    for (int k = graph->axisZ()->min(); k <= maxZ*(!_2D); k++) {
-        for (int j = graph->axisY()->min(); j <= maxY; j++) {
-            for (int i = graph->axisX()->min(); i <= maxX; i++) {
-                n = Kletka::numsInOne(i, j, k);
-                aliveNeigbours = 0;
+    size_t n;
+    size_t z = (maxX+3)*(maxY+3);
+    size_t y = maxX+3;
+    ulong* ptr;
+    byte* fieldPtr = field;
+    byte* neighborsPtr = neighbors;
 
-                if (_2D) {
-                    for (int y = j-1; y <= j+1; y++)
-                    {
-                        for (int x = i-1; x <= i+1; x++)
-                        {
-                            if (x >= 0 && x <= maxX && y >= 0 && y <= maxY && !(x == i && y == j)) {
-                                m = Kletka::numsInOne(x, y, 0);
-                                if (fieldCopy.at(m) == 1){ //если сосед живой
-                                    aliveNeigbours++;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    for (int z = k-1; z <= k+1; z++)
-                    {
-                        for (int y = j-1; y <= j+1; y++)
-                        {
-                            for (int x = i-1; x <= i+1; x++)
-                            {
-                                if (x >= 0 && x <= maxX && y >= 0 && y <= maxY && z >= 0 && z <= maxZ && !(x == i && y == j && z == k)) {
-                                    m = Kletka::numsInOne(x, y, z);
-                                    if (fieldCopy.at(m) == 1){ //если сосед живой
-                                        aliveNeigbours++;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if (fieldCopy.at(n) == 1) //живая клетка
-                {
-                    if (canDie) { //смерть клетки если можно
-                        bool gg = 0;
-                        for (int a = 0; a < needAn.size(); a++)
-                            if (aliveNeigbours == needAn[a]) { //кол-во живых соседов столько сколько надо
-                                gg = 1;
-                                break;
-                            }
-                        if (!gg) {
-                            field[n] = 0;
-                            delete Kletka::KList.at(n);
-                        }
-                    }
-                }
-                else //мертвая клетка
-                {
-                    bool gg = 0;
-                    for (int a = 0; a < needAnToCreate.size(); a++)
-                        if (aliveNeigbours == needAnToCreate[a]) { //кол-во живых соседов столько сколько надо
-                            gg = 1;
-                            break;
-                        }
-                    if (gg) { //оживление клетки
-                        new Kletka(i, j, k);
-                        field[n] = 1;
-                    }
-                }
+    for (size_t n = 0; n < fieldSize; ++n)
+    {
+        *(ulong*)(neighborsPtr + n) = 0;
+    }
+
+    for (size_t n = fieldBegin; n < fieldEnd; ++n)
+    {
+        ptr = (ulong*)(neighborsPtr + n);
+        *ptr += fieldPtr[n - 1 - y - z];
+        *ptr += fieldPtr[n - y - z];
+        *ptr += fieldPtr[n + 1 - y - z];
+        *ptr += fieldPtr[n - 1 - z];
+        *ptr += fieldPtr[n - z];
+        *ptr += fieldPtr[n + 1 - z];
+        *ptr += fieldPtr[n - 1 + y - z];
+        *ptr += fieldPtr[n + y - z];
+        *ptr += fieldPtr[n + 1 + y - z];
+
+        *ptr += fieldPtr[n - 1 - y];
+        *ptr += fieldPtr[n - y];
+        *ptr += fieldPtr[n + 1 - y];
+        *ptr += fieldPtr[n - 1];
+        *ptr += fieldPtr[n + 1];
+        *ptr += fieldPtr[n - 1 + y];
+        *ptr += fieldPtr[n + y];
+        *ptr += fieldPtr[n + 1 + y];
+
+        *ptr += fieldPtr[n - 1 - y + z];
+        *ptr += fieldPtr[n - y + z];
+        *ptr += fieldPtr[n + 1 - y + z];
+        *ptr += fieldPtr[n - 1 + z];
+        *ptr += fieldPtr[n + z];
+        *ptr += fieldPtr[n + 1 + z];
+        *ptr += fieldPtr[n - 1 + y + z];
+        *ptr += fieldPtr[n + y + z];
+        *ptr += fieldPtr[n + 1 + y + z];
+        //qDebug()<<n<<&fieldPtr[n - 1 - y - z]<<fieldPtr[n - 1 - y - z]<<&ptr[n]<<ptr[n];
+    }
+
+//    for (size_t k = 1; k <= maxZ*(!_2D)+1; k++) {
+//        for (size_t j = 1; j <= maxY+1; j++) {
+//            for (size_t i = 1; i <= maxX+1; i++) {
+//                n = Kletka::numsInOne(i,j,k);
+//                neighbors[n] = (byte)(
+//                    field[n - 1 - y - z] + field[n - y - z] + field[n + 1 - y - z] +
+//                    field[n - 1 - z] + field[n - z] + field[n + 1 - z] +
+//                    field[n - 1 + y - z] + field[n + y - z] + field[n + 1 + y - z] +
+
+//                    field[n - 1 - y] + field[n - y] + field[n + 1 - y] +
+//                    field[n - 1] + field[n + 1] +
+//                    field[n - 1 + y] + field[n + y] + field[n + 1 + y] +
+
+//                    field[n - 1 - y + z] + field[n - y + z] + field[n + 1 - y + z] +
+//                    field[n - 1 + z] + field[n + z] + field[n + 1 + z] +
+//                    field[n - 1 + y + z] + field[n + y + z] + field[n + 1 + y + z]);
+//                //qDebug()<<&neighbors[n];
+////                qDebug()<<i<<j<<k<<neighbors[n]<<n;
+////                qDebug()<<
+////                        field[n - 1 - y]<<field[n - y]<<field[n + 1 - y]<<
+////                        field[n - 1]<<field[n + 1]<<
+////                        field[n - 1 + y]<<field[n + y]<<field[n + 1 + y];
+////                qDebug()<<n - 1 - y<<n - y<<n + 1 - y<<n - 1<< n + 1<< n - 1 + y<<n + y<<n + 1 + y;
+////                qDebug()<<Kletka::numsInOne(i, j, k);
+//            }
+//        }
+//    }
+    bool keepAlive;
+    bool makeNewLife;
+//    if (_2D) {
+//        for (size_t n = fieldBegin; n <= maxX+3+y*(maxY+2)+z; ++n) {
+//            keepAlive = field[n] & needAn.contains(neighbors[n]);
+//            makeNewLife = !field[n] & needAnToCreate.contains(neighbors[n]);
+//            field[n] = (byte)((makeNewLife | keepAlive) ? 1 : 0);
+//            if (field[n] && Kletka::KList.at(n) == nullptr)
+//                Kletka::KList[n] = new Kletka(n);
+//            else if (canDie && !field[n] && Kletka::KList.at(n) != nullptr)
+//                delete Kletka::KList.at(n);
+//            //qDebug()<<field[n]<<n;
+//        }
+//    } else {
+//        for (size_t n = fieldBegin; n <= fieldEnd; ++n) {
+//            keepAlive = field[n] & needAn.contains(neighbors[n]);
+//            makeNewLife = !field[n] & needAnToCreate.contains(neighbors[n]);
+//            field[n] = (byte)((makeNewLife | keepAlive) ? 1 : 0);
+//            if (field[n] && Kletka::KList.at(n) == nullptr)
+//                Kletka::KList[n] = new Kletka(n);
+//            else if (canDie && !field[n] && Kletka::KList.at(n) != nullptr)
+//                delete Kletka::KList.at(n);
+//            //qDebug()<<field[n]<<n;
+//        }
+//    }
+    for (size_t k = 1; k <= maxZ*(!_2D)+1; ++k) {
+        for (size_t j = 1; j <= maxY+1; ++j) {
+            for (size_t i = 1; i <= maxX+1; ++i) {
+                n = Kletka::numsInOne(i,j,k);
+                keepAlive = field[n] & needAn.contains(neighbors[n]);
+                makeNewLife = !field[n] & needAnToCreate.contains(neighbors[n]);
+                field[n] = (byte)((makeNewLife | keepAlive) ? 1 : 0);
+                if (field[n] && Kletka::KList.at(n) == nullptr)
+                    Kletka::KList[n] = new Kletka(i, j, k);
+                else if (canDie && !field[n] && Kletka::KList.at(n) != nullptr)
+                    delete Kletka::KList.at(n);
+                //qDebug()<<field[n]<<n;
             }
         }
     }
+    //qDebug()<<Kletka::KList;
     ui->calcTime->setText("calc: "+QString::number(calcTimer.elapsed())+"ms");
 
     draw();

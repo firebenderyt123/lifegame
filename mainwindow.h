@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <Q3DScatter>
+#include <QElapsedTimer>
 
 #include <kletka.h>
 
@@ -19,25 +20,32 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
     QTimer *timer = nullptr;
-    QVector<int> needAn = {2, 3}; //AN - alive neighbours
-    QVector<int> needAnToCreate = {3};
+    QVector<byte> needAn = {2, 3}; //AN - alive neighbours
+    QVector<byte> needAnToCreate = {3};
 
 public:
-    static const int maxX;
-    static const int maxY;
-    static const int maxZ;
+    static const byte coresCount;
+    static const size_t maxX;
+    static const size_t maxY;
+    static const size_t maxZ;
     static bool gameIsRun;
     static bool canDie;
     static bool _2D;
 
-    static QVector<bool> field;
+    static size_t fieldBegin;
+    static size_t fieldEnd;
+    static const size_t fieldSize;
+    static byte field[];
+    static byte neighbors[];
+    static size_t longestAxis;
 
     MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 
     void draw();
-    int anyToDec(QString string, int n);
+    size_t anyToDec(QString string, size_t n);
 
+    void generateNeighbors();
     void generateRandomField();
     void prevGeneration();
     void play();
